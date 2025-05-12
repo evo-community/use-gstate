@@ -19,6 +19,7 @@ export class GStore<T> {
   private unsubscribeHooksStore: () => void = () => {};
   private stateStore: SyncStore<T> | undefined = undefined;
   private listeners = new Set<SyncStoreListener<T>>();
+  private isInitialized = false;
 
   constructor(
     private stateFactory: () => T,
@@ -33,6 +34,8 @@ export class GStore<T> {
   }
 
   initialize() {
+    if (this.isInitialized) return;
+
     const result = hooksContext.runInContext(
       () => this.stateFactory(),
       this.hooksStore,
@@ -51,7 +54,6 @@ export class GStore<T> {
       }
 
       const last = this.stateStore.getValue();
-
       const next = hooksContext.runInContext(
         () => this.stateFactory(),
         this.hooksStore,
@@ -61,37 +63,49 @@ export class GStore<T> {
         this.stateStore.setValue(next);
       }
     });
+
+    this.isInitialized = true;
   }
 
   destroy() {
+    if (!this.isInitialized) return;
+
     this.unsubscribeHooksStore();
+    this.hooksStore.destroy();
     this.stateStore = undefined;
+    this.isInitialized = false;
   }
 
   getState() {
-    if (!this.stateStore) {
+    if (!this.isInitialized) {
       this.initialize();
     }
     return this.stateStore!.getValue();
   }
 
   setState(state: T) {
-    if (!this.stateStore) {
+    if (!this.isInitialized) {
       this.initialize();
     }
     this.stateStore!.setValue(state);
   }
 
   subscribe = (callback: SyncStoreListener<T>) => {
+    if (!this.isInitialized) {
+      this.initialize();
+    }
+
     this.listeners.add(callback);
     this.options?.onSubscribed?.(this.listeners.size);
 
     if (this.listeners.size === 1) {
       this.options?.onFirstSubscribed?.();
     }
+
     return () => {
       this.listeners.delete(callback);
       this.options?.onUnsubscribed?.(this.listeners.size);
+
       if (this.listeners.size === 0) {
         this.options?.onAllUnsubscribed?.();
         if (this.options.destroy === "on-all-unsubscribed") {

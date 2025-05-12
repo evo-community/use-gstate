@@ -31,6 +31,7 @@ export class HooksStore {
   dataList = new Array(100);
   effects: Effect[] = new Array(100);
   currentIndex = -1;
+  private isDestroyed = false;
 
   private effectsBather: Bather = new TimerBather();
   private layoutEffectsBather: Bather = new MicroTaskBather();
@@ -49,6 +50,7 @@ export class HooksStore {
       stateEntry = [
         applyAction(initialState, undefined),
         (action: React.SetStateAction<T>) => {
+          if (this.isDestroyed) return;
           stateEntry[0] = applyAction(action, stateEntry[0]);
           this.notifyListeners();
         },
@@ -61,6 +63,8 @@ export class HooksStore {
   }
 
   scheduleEffect(effect: Effect) {
+    if (this.isDestroyed) return;
+
     const effectsState = this.getCurrent({
       __type: "effect",
       clearFunction: () => {},
@@ -73,19 +77,25 @@ export class HooksStore {
 
     if (effect.type === "layout-effect") {
       this.layoutEffectsBather.schedule(() => {
+        if (this.isDestroyed) return;
         flushSync(() => {
           this.runAllEffects("layout-effect");
         });
       });
     } else {
       this.effectsBather.schedule(() => {
+        if (this.isDestroyed) return;
         this.runAllEffects("effect");
       });
     }
   }
 
   runAllEffects(type: "layout-effect" | "effect") {
+    if (this.isDestroyed) return;
+
     this.dataList.forEach(([data]) => {
+      if (!data || this.isDestroyed) return;
+
       if (data.__type === "effect" && data.type === type) {
         const effectState = data as EffectState;
 
@@ -104,32 +114,55 @@ export class HooksStore {
   }
 
   destroy() {
+    this.isDestroyed = true;
     this.dataList.forEach(([data]) => {
-      if (data.__type === "effect") {
+      if (data?.__type === "effect") {
         const effectState = data as EffectState;
-        effectState.clearFunction();
+        try {
+          effectState.clearFunction();
+        } catch (error) {
+          console.error("Error cleaning up effect:", error);
+        }
       }
     });
     this.dataList = [];
     this.currentIndex = -1;
+    this.listeners.clear();
   }
 
   next() {
+    if (this.isDestroyed) return;
     this.currentIndex++;
   }
 
   resetCurrent() {
+    if (this.isDestroyed) return;
     this.currentIndex = -1;
   }
 
   notifyListeners() {
+    if (this.isDestroyed) return;
+
     this.layoutEffectsBather.schedule(() => {
-      this.listeners.forEach((cb) => cb());
+      if (this.isDestroyed) return;
+      this.listeners.forEach((cb) => {
+        try {
+          cb();
+        } catch (error) {
+          console.error("Error in listener:", error);
+        }
+      });
     });
   }
 
   addListener(cb: () => void) {
+    if (this.isDestroyed) return () => {};
+
     this.listeners.add(cb);
-    return () => this.listeners.delete(cb);
+    return () => {
+      if (!this.isDestroyed) {
+        this.listeners.delete(cb);
+      }
+    };
   }
 }
